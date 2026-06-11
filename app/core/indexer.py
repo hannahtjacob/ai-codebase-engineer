@@ -8,8 +8,10 @@ from sqlalchemy import delete
 from sqlalchemy.orm import sessionmaker
 
 from app.core.chunker import CodeChunker
+from app.core.embedding_service import EmbeddingService
 from app.core.file_scanner import FileScanner
 from app.core.repo_loader import RepoLoader
+from app.core.vector_store import VectorStore
 from app.models.db import (
     CodeChunk as CodeChunkRecord,
     Repository,
@@ -33,11 +35,20 @@ class RepositoryIndexer:
         scanner: FileScanner | None = None,
         chunker: CodeChunker | None = None,
         repo_loader: RepoLoader | None = None,
+        embedding_service: EmbeddingService | None = None,
+        vector_store: VectorStore | None = None,
     ) -> None:
+        if (embedding_service is None) != (vector_store is None):
+            raise ValueError(
+                "embedding_service and vector_store must be provided together"
+            )
+
         self.session_factory = session_factory
         self.scanner = scanner or FileScanner()
         self.chunker = chunker or CodeChunker()
         self.repo_loader = repo_loader or RepoLoader()
+        self.embedding_service = embedding_service
+        self.vector_store = vector_store
 
     def index_url(self, repo_url: str) -> IndexingResult:
         repo_id = self.repo_loader.repo_id_from_url(repo_url)
@@ -58,6 +69,13 @@ class RepositoryIndexer:
         resolved_path = Path(repository_path).expanduser().resolve()
         files = self.scanner.scan(resolved_path)
         chunks = self.chunker.chunk_files(files, repo_id)
+
+        if self.embedding_service is not None and self.vector_store is not None:
+            embeddings = self.embedding_service.embed_texts(
+                [chunk.content for chunk in chunks]
+            )
+            self.vector_store.delete_repo(repo_id)
+            self.vector_store.upsert_chunks(repo_id, chunks, embeddings)
 
         with self.session_factory.begin() as session:
             repository = session.get(Repository, repo_id)
