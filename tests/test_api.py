@@ -190,10 +190,12 @@ def test_missing_repository_returns_404(tmp_path: Path) -> None:
             json={"repo_id": "missing", "question": "Where is auth?"},
         )
         history_response = client.get("/query/history/missing")
+        graph_response = client.get("/graph/missing")
 
     assert metadata_response.status_code == 404
     assert query_response.status_code == 404
     assert history_response.status_code == 404
+    assert graph_response.status_code == 404
 
 
 def test_rejects_non_github_repository_url(tmp_path: Path) -> None:
@@ -206,3 +208,50 @@ def test_rejects_non_github_repository_url(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 422
+
+
+def test_get_repository_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
+    repository_path = tmp_path / "repository"
+    repository_path.mkdir()
+    (repository_path / "helpers.py").write_text(
+        "def helper():\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    (repository_path / "service.py").write_text(
+        "from helpers import helper\n"
+        "\n"
+        "def run():\n"
+        "    return helper()\n",
+        encoding="utf-8",
+    )
+    client, _, _, session_factory = make_client(tmp_path)
+    seed_repository(session_factory, tmp_path)
+
+    with client:
+        response = client.get("/graph/abc123")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {
+        (node["type"], node["name"])
+        for node in payload["nodes"]
+    } >= {
+        ("Repository", "abc123"),
+        ("File", "helpers.py"),
+        ("File", "service.py"),
+        ("Function", "helper"),
+        ("Function", "run"),
+        ("Import", "helpers.helper"),
+    }
+    assert {
+        (edge["source"], edge["target"], edge["type"])
+        for edge in payload["edges"]
+    } >= {
+        ("file:service.py", "file:helpers.py", "IMPORTS"),
+        (
+            "function:service.py:run",
+            "function:helpers.py:helper",
+            "CALLS",
+        ),
+    }

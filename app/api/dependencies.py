@@ -4,6 +4,7 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.core.indexer import RepositoryIndexer
+from app.core.graph_builder import GraphBuilder
 from app.core.rag_engine import RagEngine
 
 
@@ -18,3 +19,7 @@ def get_indexer(request: Request) -> RepositoryIndexer:
 
 def get_rag_engine(request: Request) -> RagEngine:
     return request.app.state.rag_engine
+
+
+def get_graph_builder(request: Request) -> GraphBuilder:
+    return request.app.state.graph_builder

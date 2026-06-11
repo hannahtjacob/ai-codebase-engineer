@@ -7,9 +7,11 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from sqlalchemy.orm import sessionmaker
 
+from app.api.graph import router as graph_router
 from app.api.query import router as query_router
 from app.api.repos import router as repos_router
 from app.core.embedding_service import EmbeddingService
+from app.core.graph_builder import GraphBuilder
 from app.core.indexer import RepositoryIndexer
 from app.core.rag_engine import RagEngine
 from app.core.repo_loader import RepoLoader
@@ -23,6 +25,7 @@ def create_app(
     session_factory: sessionmaker | None = None,
     indexer: RepositoryIndexer | None = None,
     rag_engine: RagEngine | None = None,
+    graph_builder: GraphBuilder | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -32,6 +35,7 @@ def create_app(
             app_session_factory = get_session_factory(engine)
 
         app.state.session_factory = app_session_factory
+        app.state.graph_builder = graph_builder or GraphBuilder()
         if indexer is None or rag_engine is None:
             shared_embedding_service = EmbeddingService()
             shared_vector_store = VectorStore()
@@ -61,6 +65,7 @@ def create_app(
     )
     application.include_router(repos_router)
     application.include_router(query_router)
+    application.include_router(graph_router)
     return application
 
 

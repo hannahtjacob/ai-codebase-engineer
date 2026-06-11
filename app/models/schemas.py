@@ -67,3 +67,22 @@ class QueryHistoryItem(BaseModel):
     answer: str | None
     duration_ms: float | None
     created_at: datetime
+
+
+class GraphNode(BaseModel):
+    id: str
+    type: str
+    name: str
+    file_path: str | None = None
+    line: int | None = None
+
+
+class GraphEdge(BaseModel):
+    source: str
+    target: str
+    type: str
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
