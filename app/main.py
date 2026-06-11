@@ -51,6 +51,8 @@ def create_app(
                 retriever=Retriever(
                     embedding_service=shared_embedding_service,
                     vector_store=shared_vector_store,
+                    graph_builder=app.state.graph_builder,
+                    session_factory=app_session_factory,
                 )
             )
         else:

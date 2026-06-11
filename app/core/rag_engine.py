@@ -79,7 +79,15 @@ class RagEngine:
         if not question.strip():
             raise ValueError("question must not be empty")
 
-        chunks = self.retriever.retrieve(repo_id, question, k=k)
+        graph_retrieve = getattr(
+            self.retriever,
+            "retrieve_with_graph_expansion",
+            None,
+        )
+        if callable(graph_retrieve):
+            chunks = graph_retrieve(repo_id, question, top_k=k)
+        else:
+            chunks = self.retriever.retrieve(repo_id, question, k=k)
         if not chunks:
             return RagResult(
                 answer=(
