@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,12 @@ Question:
 Code context:
 {context}
 """
+
+
+@dataclass(frozen=True)
+class RagResult:
+    answer: str
+    sources: tuple[RetrievedChunk, ...]
 
 
 class RagEngine:
@@ -61,21 +68,36 @@ class RagEngine:
         question: str,
         k: int = 8,
     ) -> str:
+        return self.answer_with_sources(repo_id, question, k=k).answer
+
+    def answer_with_sources(
+        self,
+        repo_id: str,
+        question: str,
+        k: int = 8,
+    ) -> RagResult:
         if not question.strip():
             raise ValueError("question must not be empty")
 
         chunks = self.retriever.retrieve(repo_id, question, k=k)
         if not chunks:
-            return (
-                "I cannot answer from the provided code context. Additional relevant "
-                "source files or a broader repository index would be needed."
+            return RagResult(
+                answer=(
+                    "I cannot answer from the provided code context. Additional "
+                    "relevant source files or a broader repository index would be "
+                    "needed."
+                ),
+                sources=(),
             )
 
         prompt = self.build_prompt(question, chunks)
         answer = self._generate(prompt, question, chunks).strip()
         if not answer:
             raise RuntimeError("LLM returned an empty answer")
-        return self._ensure_citation(answer, chunks)
+        return RagResult(
+            answer=self._ensure_citation(answer, chunks),
+            sources=tuple(chunks),
+        )
 
     def format_context(self, chunks: Sequence[RetrievedChunk]) -> str:
         if not chunks:
