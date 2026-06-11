@@ -4,6 +4,7 @@ import httpx
 import pytest
 from openai import APIConnectionError
 
+from app.core.cache import SQLiteCache
 from app.core.embedding_service import EmbeddingService, EmbeddingServiceError
 
 
@@ -133,3 +134,21 @@ def test_rejects_non_string_input() -> None:
 
     with pytest.raises(TypeError, match="each text"):
         service.embed_texts(["valid", 123])  # type: ignore[list-item]
+
+
+def test_embeddings_are_cached_by_content_hash() -> None:
+    client = make_client([make_response([[1.0, 2.0]])])
+    cache = SQLiteCache(database_url="sqlite:///:memory:")
+    service = EmbeddingService(
+        api_key="test-key",
+        client=client,
+        cache=cache,
+    )
+
+    first = service.embed_texts(["same content", "same content"])
+    second = service.embed_texts(["same content"])
+
+    assert first == [[1.0, 2.0], [1.0, 2.0]]
+    assert second == [[1.0, 2.0]]
+    assert len(client.embeddings.calls) == 1
+    assert client.embeddings.calls[0]["input"] == ["same content"]

@@ -15,6 +15,8 @@ from openai import (
     RateLimitError,
 )
 
+from app.core.cache import SQLiteCache
+
 
 class EmbeddingServiceError(RuntimeError):
     """Raised when an embedding batch cannot be generated."""
@@ -36,6 +38,8 @@ class EmbeddingService:
         fake_dimensions: int = DEFAULT_FAKE_DIMENSIONS,
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        cache: SQLiteCache | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero")
@@ -56,6 +60,8 @@ class EmbeddingService:
         self.fake_dimensions = fake_dimensions
         self._sleep = sleep
         self._client = client
+        self.cache = cache
+        self.cache_ttl_seconds = cache_ttl_seconds
 
         if self._client is None and self.api_key:
             # Retry behavior is owned here so backoff is predictable and testable.
@@ -73,14 +79,42 @@ class EmbeddingService:
         if not texts:
             return []
 
-        embeddings: list[list[float]] = []
-        for start in range(0, len(texts), self.batch_size):
-            batch = texts[start : start + self.batch_size]
-            if self.is_fake:
-                embeddings.extend(self._fake_embedding(text) for text in batch)
+        embeddings: list[list[float] | None] = [None] * len(texts)
+        missing_by_key: dict[str, list[int]] = {}
+
+        for index, text in enumerate(texts):
+            cache_key = self._cache_key(text)
+            cached = self.cache.get(cache_key) if self.cache is not None else None
+            if self._is_embedding(cached):
+                embeddings[index] = [float(value) for value in cached]
             else:
-                embeddings.extend(self._embed_openai_batch(batch))
-        return embeddings
+                missing_by_key.setdefault(cache_key, []).append(index)
+
+        missing_keys = list(missing_by_key)
+        missing_texts = [texts[missing_by_key[key][0]] for key in missing_keys]
+        generated: list[list[float]] = []
+        for start in range(0, len(missing_texts), self.batch_size):
+            batch = missing_texts[start : start + self.batch_size]
+            if not batch:
+                break
+            if self.is_fake:
+                generated.extend(self._fake_embedding(text) for text in batch)
+            else:
+                generated.extend(self._embed_openai_batch(batch))
+
+        for cache_key, embedding in zip(missing_keys, generated):
+            if self.cache is not None:
+                self.cache.set(
+                    cache_key,
+                    embedding,
+                    ttl_seconds=self.cache_ttl_seconds,
+                )
+            for index in missing_by_key[cache_key]:
+                embeddings[index] = embedding
+
+        if any(embedding is None for embedding in embeddings):
+            raise EmbeddingServiceError("Failed to generate all requested embeddings")
+        return [embedding for embedding in embeddings if embedding is not None]
 
     def _embed_openai_batch(self, texts: Sequence[str]) -> list[list[float]]:
         for attempt in range(self.max_retries + 1):
@@ -132,3 +166,20 @@ class EmbeddingService:
         vector = values[: self.fake_dimensions]
         magnitude = math.sqrt(sum(value * value for value in vector))
         return [value / magnitude for value in vector]
+
+    def _cache_key(self, text: str) -> str:
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        mode = (
+            f"fake:{self.fake_dimensions}"
+            if self.is_fake
+            else f"openai:{self.model}"
+        )
+        return f"embedding:{mode}:{content_hash}"
+
+    @staticmethod
+    def _is_embedding(value: object) -> bool:
+        return (
+            isinstance(value, list)
+            and bool(value)
+            and all(isinstance(item, (int, float)) for item in value)
+        )

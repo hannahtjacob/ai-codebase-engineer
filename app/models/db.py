@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy.types import JSON
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -108,6 +109,17 @@ class QueryLog(Base):
     )
 
     repository: Mapped[Repository | None] = relationship(back_populates="query_logs")
+
+
+class CacheEntry(Base):
+    __tablename__ = "cache_entries"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value_json: Mapped[object] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 def get_engine(database_url: str | None = None, *, echo: bool = False) -> Engine:

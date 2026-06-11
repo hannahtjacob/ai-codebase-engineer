@@ -21,6 +21,7 @@ def test_init_db_creates_all_tables() -> None:
 
     assert returned_engine is engine
     assert set(inspect(engine).get_table_names()) == {
+        "cache_entries",
         "code_chunks",
         "query_logs",
         "repositories",

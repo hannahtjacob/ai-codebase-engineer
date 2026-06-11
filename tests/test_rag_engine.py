@@ -1,3 +1,4 @@
+from app.core.cache import SQLiteCache
 from app.core.rag_engine import RagEngine
 from app.core.retriever import RetrievedChunk
 
@@ -129,3 +130,43 @@ def test_no_context_reports_uncertainty_without_calling_llm() -> None:
 
     assert "Additional relevant source files" in answer
     assert not called
+
+
+def test_final_answers_are_cached_by_repo_and_normalized_question() -> None:
+    chunks = [
+        make_chunk(
+            chunk_id="chunk-1",
+            file_path="app/auth/routes.py",
+            start_line=10,
+            end_line=45,
+            content="def login_user(...):\n    ...\n",
+        )
+    ]
+    retriever = StubRetriever(chunks)
+    calls = 0
+
+    def llm(_: str) -> str:
+        nonlocal calls
+        calls += 1
+        return "Authentication is handled here."
+
+    engine = RagEngine(
+        retriever=retriever,
+        llm=llm,
+        cache=SQLiteCache(database_url="sqlite:///:memory:"),
+    )
+
+    first = engine.answer_with_sources(
+        "repo-123",
+        "How does   authentication work?",
+    )
+    second = engine.answer_with_sources(
+        "repo-123",
+        "  HOW DOES authentication WORK?  ",
+    )
+
+    assert second == first
+    assert calls == 1
+    assert retriever.calls == [
+        ("repo-123", "How does   authentication work?", 8)
+    ]

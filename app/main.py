@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.graph import router as graph_router
 from app.api.query import router as query_router
 from app.api.repos import router as repos_router
+from app.core.cache import SQLiteCache
 from app.core.embedding_service import EmbeddingService
 from app.core.graph_builder import GraphBuilder
 from app.core.indexer import RepositoryIndexer
@@ -37,7 +38,9 @@ def create_app(
         app.state.session_factory = app_session_factory
         app.state.graph_builder = graph_builder or GraphBuilder()
         if indexer is None or rag_engine is None:
-            shared_embedding_service = EmbeddingService()
+            database_engine = app_session_factory.kw["bind"]
+            shared_cache = SQLiteCache(database_engine)
+            shared_embedding_service = EmbeddingService(cache=shared_cache)
             shared_vector_store = VectorStore()
             app.state.indexer = indexer or RepositoryIndexer(
                 app_session_factory,
@@ -53,7 +56,8 @@ def create_app(
                     vector_store=shared_vector_store,
                     graph_builder=app.state.graph_builder,
                     session_factory=app_session_factory,
-                )
+                ),
+                cache=shared_cache,
             )
         else:
             app.state.indexer = indexer

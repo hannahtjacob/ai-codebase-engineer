@@ -9,6 +9,7 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.cache import SQLiteCache
 from app.core.embedding_service import EmbeddingService
 from app.core.indexer import RepositoryIndexer
 from app.core.repo_loader import RepoLoader
@@ -47,10 +48,11 @@ def main() -> None:
     started_at = time.perf_counter()
     engine = get_engine()
     init_db(engine)
+    cache = SQLiteCache(engine)
     indexer = RepositoryIndexer(
         get_session_factory(engine),
         repo_loader=RepoLoader(os.getenv("REPO_STORAGE_PATH", "data/repos")),
-        embedding_service=EmbeddingService(),
+        embedding_service=EmbeddingService(cache=cache),
         vector_store=VectorStore(),
     )
     result = indexer.index_url(args.repo_url)
