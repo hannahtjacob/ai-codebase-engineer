@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,6 +14,17 @@ from app.models.db import CacheEntry, get_engine
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class CacheStats:
+    hits: int
+    misses: int
+
+    @property
+    def hit_rate(self) -> float | None:
+        total = self.hits + self.misses
+        return self.hits / total if total else None
 
 
 class SQLiteCache:
@@ -34,6 +46,8 @@ class SQLiteCache:
             expire_on_commit=False,
         )
         self._clock = clock
+        self._hits = 0
+        self._misses = 0
 
     def get(self, key: str) -> Any | None:
         self._validate_key(key)
@@ -42,11 +56,14 @@ class SQLiteCache:
         with self.session_factory.begin() as session:
             entry = session.get(CacheEntry, key)
             if entry is None:
+                self._misses += 1
                 return None
             expires_at = self._normalize_datetime(entry.expires_at)
             if expires_at is not None and expires_at <= now:
                 session.delete(entry)
+                self._misses += 1
                 return None
+            self._hits += 1
             return entry.value_json
 
     def set(
@@ -87,6 +104,13 @@ class SQLiteCache:
         self._validate_key(key)
         with self.session_factory.begin() as session:
             session.execute(delete(CacheEntry).where(CacheEntry.key == key))
+
+    def stats(self) -> CacheStats:
+        return CacheStats(hits=self._hits, misses=self._misses)
+
+    def reset_stats(self) -> None:
+        self._hits = 0
+        self._misses = 0
 
     @staticmethod
     def _validate_key(key: str) -> None:
