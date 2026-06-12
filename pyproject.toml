@@ -1,3 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-codebase-engineer"
+version = "0.1.0"
+description = "LLM-powered codebase intelligence with retrieval and dependency graphs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb>=1.5,<2",
+    "fastapi>=0.115,<1",
+    "gitpython>=3.1,<4",
+    "networkx>=3.4,<4",
+    "openai>=2,<3",
+    "pydantic>=2.10,<3",
+    "requests>=2.32,<3",
+    "sqlalchemy>=2,<3",
+    "streamlit>=1.40,<2",
+    "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+test = [
+    "httpx>=0.28,<1",
+    "pytest>=8,<10",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*", "frontend*"]
+
+[tool.setuptools.package-data]
+app = ["prompts/*.txt"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
