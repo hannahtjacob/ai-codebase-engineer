@@ -1,5 +1,7 @@
 # AI Codebase Engineer
 
+[![CI](https://github.com/hannahtjacob/ai-codebase-engineer/actions/workflows/ci.yml/badge.svg)](https://github.com/hannahtjacob/ai-codebase-engineer/actions/workflows/ci.yml)
+
 LLM-powered codebase intelligence system that parses repositories, builds
 vector and dependency-graph indexes, and answers architectural questions with
 source citations.

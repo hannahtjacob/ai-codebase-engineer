@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Detect Ruff configuration
+        id: ruff
+        shell: python
+        run: |
+          import os
+          import tomllib
+          from pathlib import Path
+
+          config = tomllib.loads(Path("pyproject.toml").read_text())
+          configured = "ruff" in config.get("tool", {})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"configured={str(configured).lower()}", file=output)
+
+      - name: Run Ruff
+        if: steps.ruff.outputs.configured == 'true'
+        run: |
+          python -m pip install ruff
+          python -m ruff check .
