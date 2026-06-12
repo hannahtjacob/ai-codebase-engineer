@@ -288,26 +288,3 @@ scripts/           indexing and evaluation CLIs
 tests/             unit and integration tests
 data/              persisted repositories, indexes, database, and eval data
 ```
-
-## Engineering Notes
-
-- Stable SHA-256 chunk IDs make re-indexing deterministic.
-- Re-indexing replaces stale relational and vector records for a repository.
-- Repository-scoped filters prevent vector results from crossing projects.
-- OpenAI requests include batching, bounded retries, and exponential backoff.
-- SQLite cache entries support JSON values and optional TTL expiration.
-- API services are dependency-injectable, allowing tests to avoid network calls.
-- CI runs the Python 3.11 test suite on pushes and pull requests.
-
-## Future Improvements
-
-- Persist dependency graphs in Neo4j rather than rebuilding them per request.
-- Add incremental indexing based on Git commit and file-content hashes.
-- Support richer parsers for TypeScript, Java, Go, and other languages.
-- Introduce background jobs for large repository indexing.
-- Add authentication, per-user repository ownership, and rate limiting.
-- Add reranking and context-budget selection after graph expansion.
-- Track model/token cost, index freshness, and retrieval traces.
-- Publish a versioned benchmark dataset and baseline evaluation results.
-- Add production database migrations and PostgreSQL support.
-- Add distributed vector storage, such as Qdrant, for larger deployments.
