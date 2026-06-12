@@ -107,3 +107,9 @@ def test_invalid_python_uses_fallback_chunking() -> None:
     assert (chunk.start_line, chunk.end_line) == (1, 2)
     assert chunk.symbol_name is None
     assert chunk.symbol_type is None
+
+
+def test_empty_content_does_not_create_chunks() -> None:
+    source = make_source_file(" \n\t\n", language="TypeScript")
+
+    assert CodeChunker().chunk_file(source, repo_id="repo-123") == []

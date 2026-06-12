@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.cache import SQLiteCache
+from app.config import load_environment
 from app.core.embedding_service import EmbeddingService
 from app.core.indexer import RepositoryIndexer
 from app.core.repo_loader import RepoLoader
@@ -36,6 +37,7 @@ def format_summary(
 
 
 def main() -> None:
+    load_environment()
     parser = argparse.ArgumentParser(
         description=(
             "Clone a GitHub repository, generate code embeddings, and persist "

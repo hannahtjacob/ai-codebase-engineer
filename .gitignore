@@ -222,3 +222,4 @@ data/repos/
 data/indexes/
 .chroma/
 .DS_Store
+.env

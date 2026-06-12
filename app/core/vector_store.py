@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,9 @@ from typing import Iterable, Sequence
 import chromadb
 
 from app.core.chunker import CodeChunk
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,8 +44,11 @@ class VectorStore:
 
         self.path = chroma_path.resolve()
         self.client = chromadb.PersistentClient(path=str(self.path))
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
+        self.collection_name = collection_name
+
+    def _collection_for_dimensions(self, dimensions: int):
+        return self.client.get_or_create_collection(
+            name=f"{self.collection_name}_d{dimensions}",
             configuration={"hnsw": {"space": "cosine"}},
         )
 
@@ -67,23 +74,28 @@ class VectorStore:
         if len(dimensions) != 1:
             raise ValueError("all embeddings must have the same dimensions")
 
-        self.collection.upsert(
-            ids=[chunk.chunk_id for chunk in chunk_list],
-            embeddings=embedding_list,
-            documents=[chunk.content for chunk in chunk_list],
-            metadatas=[
-                {
-                    "repo_id": repo_id,
-                    "file_path": chunk.file_path,
-                    "language": chunk.language,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "symbol_name": chunk.symbol_name or "",
-                    "symbol_type": chunk.symbol_type or "",
-                }
-                for chunk in chunk_list
-            ],
-        )
+        try:
+            collection = self._collection_for_dimensions(dimensions.pop())
+            collection.upsert(
+                ids=[chunk.chunk_id for chunk in chunk_list],
+                embeddings=embedding_list,
+                documents=[chunk.content for chunk in chunk_list],
+                metadatas=[
+                    {
+                        "repo_id": repo_id,
+                        "file_path": chunk.file_path,
+                        "language": chunk.language,
+                        "start_line": chunk.start_line,
+                        "end_line": chunk.end_line,
+                        "symbol_name": chunk.symbol_name or "",
+                        "symbol_type": chunk.symbol_type or "",
+                    }
+                    for chunk in chunk_list
+                ],
+            )
+        except Exception as error:
+            logger.exception("Chroma upsert failed for repository %s", repo_id)
+            raise RuntimeError(f"Chroma upsert failed: {error}") from error
 
     def search(
         self,
@@ -96,12 +108,17 @@ class VectorStore:
         if not query_embedding:
             raise ValueError("query_embedding must not be empty")
 
-        results = self.collection.query(
-            query_embeddings=[list(query_embedding)],
-            n_results=k,
-            where={"repo_id": repo_id},
-            include=["documents", "metadatas", "distances"],
-        )
+        try:
+            collection = self._collection_for_dimensions(len(query_embedding))
+            results = collection.query(
+                query_embeddings=[list(query_embedding)],
+                n_results=k,
+                where={"repo_id": repo_id},
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as error:
+            logger.exception("Chroma search failed for repository %s", repo_id)
+            raise RuntimeError(f"Chroma search failed: {error}") from error
 
         ids = results["ids"][0] if results["ids"] else []
         documents = results["documents"][0] if results["documents"] else []
@@ -131,7 +148,14 @@ class VectorStore:
         return search_results
 
     def delete_repo(self, repo_id: str) -> None:
-        self.collection.delete(where={"repo_id": repo_id})
+        try:
+            prefix = f"{self.collection_name}_d"
+            for collection in self.client.list_collections():
+                if collection.name.startswith(prefix):
+                    collection.delete(where={"repo_id": repo_id})
+        except Exception as error:
+            logger.exception("Chroma delete failed for repository %s", repo_id)
+            raise RuntimeError(f"Chroma delete failed: {error}") from error
 
     @staticmethod
     def _optional_metadata(value: object) -> str | None:

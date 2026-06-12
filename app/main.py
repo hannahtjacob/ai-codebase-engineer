@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -10,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.graph import router as graph_router
 from app.api.query import router as query_router
 from app.api.repos import router as repos_router
+from app.config import load_environment
 from app.core.cache import SQLiteCache
 from app.core.embedding_service import EmbeddingService
 from app.core.graph_builder import GraphBuilder
@@ -21,6 +23,9 @@ from app.core.vector_store import VectorStore
 from app.models.db import get_engine, get_session_factory, init_db
 
 
+logger = logging.getLogger(__name__)
+
+
 def create_app(
     *,
     session_factory: sessionmaker | None = None,
@@ -30,6 +35,8 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        load_environment()
+
         app_session_factory = session_factory
         if app_session_factory is None:
             engine = init_db(get_engine())

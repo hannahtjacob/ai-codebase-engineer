@@ -49,6 +49,9 @@ class CodeChunker:
         return chunks
 
     def chunk_file(self, source_file: SourceFile, repo_id: str) -> list[CodeChunk]:
+        if not source_file.content.strip():
+            return []
+
         if source_file.language.lower() == "python":
             try:
                 return self._chunk_python(source_file, repo_id)
@@ -75,6 +78,8 @@ class CodeChunker:
 
             start_line = self._python_start_line(node)
             content = "".join(lines[start_line - 1 : end_line])
+            if not content.strip():
+                continue
             chunks.append(
                 self._make_chunk(
                     repo_id=repo_id,
@@ -101,6 +106,11 @@ class CodeChunker:
 
         for start_index in range(0, len(lines), step):
             end_index = min(start_index + self.window_size, len(lines))
+            content = "".join(lines[start_index:end_index])
+            if not content.strip():
+                if end_index == len(lines):
+                    break
+                continue
             chunks.append(
                 self._make_chunk(
                     repo_id=repo_id,
@@ -109,7 +119,7 @@ class CodeChunker:
                     end_line=end_index,
                     symbol_name=None,
                     symbol_type=None,
-                    content="".join(lines[start_index:end_index]),
+                    content=content,
                 )
             )
             if end_index == len(lines):

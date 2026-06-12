@@ -67,3 +67,23 @@ def test_extract_error_message_handles_fastapi_validation_errors() -> None:
     assert extract_error_message(response) == (
         "Field required; Input should be greater than or equal to 1"
     )
+
+
+def test_post_json_preserves_backend_indexing_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_post(*_: Any, **__: Any) -> StubResponse:
+        return StubResponse(
+            status_code=502,
+            payload={
+                "detail": (
+                    "Unable to generate repository embeddings: "
+                    "Incorrect API key provided"
+                )
+            },
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    with pytest.raises(BackendError, match="Incorrect API key provided"):
+        post_json("/repos/index", {"repo_url": "https://github.com/a/b"})

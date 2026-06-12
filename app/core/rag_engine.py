@@ -7,8 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+import requests
+from openai import APIError, OpenAI
 
+from app.config import (
+    SUPPORTED_LLM_PROVIDERS,
+    get_llm_provider,
+    get_ollama_model,
+)
 from app.core.cache import SQLiteCache
 from app.core.retriever import RetrievedChunk, Retriever
 
@@ -35,38 +41,87 @@ class RagResult:
     sources: tuple[RetrievedChunk, ...]
 
 
+class RagEngineError(RuntimeError):
+    """Raised when the RAG engine cannot generate an answer."""
+
+
+class MissingOpenAIAPIKeyError(RagEngineError):
+    """Raised when answer generation is requested without OpenAI credentials."""
+
+
+class OllamaUnavailableError(RagEngineError):
+    """Raised when the local Ollama service cannot generate an answer."""
+
+
 class RagEngine:
-    DEFAULT_MODEL = "gpt-5-mini"
+    DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+    OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+    DEFAULT_TEMPERATURE = 0.2
+    SYSTEM_MESSAGE = (
+        "You are a senior software engineer explaining a codebase. "
+        "Use only the provided code context and cite file paths with line ranges."
+    )
 
     def __init__(
         self,
         retriever: Retriever | None = None,
         *,
+        provider: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
+        ollama_model: str | None = None,
         client: Any | None = None,
+        http_client: Any = requests,
         llm: Callable[[str], str] | None = None,
         prompt_template: str | None = None,
         cache: SQLiteCache | None = None,
         cache_ttl_seconds: float | None = None,
+        temperature: float = DEFAULT_TEMPERATURE,
+        test_mode: bool = False,
     ) -> None:
+        if llm is not None and not test_mode:
+            raise ValueError("llm injection is only available in test mode")
+
         environment_key = os.getenv("OPENAI_API_KEY")
         resolved_key = api_key if api_key is not None else environment_key
+        resolved_provider = (provider or get_llm_provider()).strip().lower()
+        if llm is not None:
+            resolved_provider = "mock"
+        if resolved_provider not in SUPPORTED_LLM_PROVIDERS:
+            supported = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
+            raise ValueError(
+                f"Unsupported LLM provider '{resolved_provider}'. "
+                f"Expected one of: {supported}."
+            )
+        if resolved_provider == "mock" and not test_mode:
+            raise ValueError("mock LLM provider is only available in test mode")
+
+        self.provider = resolved_provider
         self.api_key = resolved_key.strip() if resolved_key else None
-        self.model = model or os.getenv("OPENAI_CHAT_MODEL", self.DEFAULT_MODEL)
+        self.openai_model = model or self.DEFAULT_OPENAI_MODEL
+        self.ollama_model = ollama_model or get_ollama_model()
+        self.model = (
+            self.ollama_model
+            if self.provider == "ollama"
+            else self.openai_model
+        )
+        self.temperature = temperature
         self.retriever = retriever or Retriever()
         self.prompt_template = prompt_template or self._load_prompt_template()
         self._llm = llm
         self._client = client
+        self._http_client = http_client
+        self.test_mode = test_mode
         self.cache = cache
         self.cache_ttl_seconds = cache_ttl_seconds
 
-        if self._llm is None and self._client is None and self.api_key:
+        if (
+            self.provider == "openai"
+            and self._llm is None
+            and self._client is None
+            and self.api_key
+        ):
             self._client = OpenAI(api_key=self.api_key)
-
-    @property
-    def is_mock(self) -> bool:
-        return self._llm is None and self._client is None
 
     def answer(
         self,
@@ -75,6 +130,26 @@ class RagEngine:
         k: int = 8,
     ) -> str:
         return self.answer_with_sources(repo_id, question, k=k).answer
+
+    def answer_question(
+        self,
+        repo_id: str,
+        question: str,
+        top_k: int = 8,
+    ) -> dict[str, object]:
+        result = self.answer_with_sources(repo_id, question, k=top_k)
+        return {
+            "answer": result.answer,
+            "sources": [
+                {
+                    "file_path": source.file_path,
+                    "start_line": source.start_line,
+                    "end_line": source.end_line,
+                    "symbol_name": source.symbol_name,
+                }
+                for source in result.sources
+            ],
+        }
 
     def answer_with_sources(
         self,
@@ -145,29 +220,87 @@ class RagEngine:
     def _generate(
         self,
         prompt: str,
-        question: str,
-        chunks: Sequence[RetrievedChunk],
+        _question: str,
+        _chunks: Sequence[RetrievedChunk],
     ) -> str:
         if self._llm is not None:
             return self._llm(prompt)
-        if self._client is not None:
-            response = self._client.responses.create(
-                model=self.model,
-                input=prompt,
+        if self.provider == "ollama":
+            return self._generate_ollama(prompt)
+        if self.provider == "mock":
+            raise RagEngineError("Mock LLM mode requires an injected test LLM.")
+        if self._client is None:
+            raise MissingOpenAIAPIKeyError(
+                "OPENAI_API_KEY is required when LLM_PROVIDER=openai."
             )
-            return response.output_text
-        return self._mock_answer(question, chunks)
 
-    @staticmethod
-    def _mock_answer(
-        question: str,
-        chunks: Sequence[RetrievedChunk],
-    ) -> str:
-        first = chunks[0]
-        return (
-            f"Mock answer for {question!r}: the most relevant retrieved code is "
-            f"`{first.citation}`."
-        )
+        try:
+            response = self._client.chat.completions.create(
+                model=self.openai_model,
+                temperature=self.temperature,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": self.SYSTEM_MESSAGE,
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+            )
+        except APIError as error:
+            raise RagEngineError("OpenAI answer generation failed.") from error
+
+        content = response.choices[0].message.content
+        if not content:
+            raise RagEngineError("OpenAI returned an empty answer.")
+        return content
+
+    def _generate_ollama(self, prompt: str) -> str:
+        try:
+            response = self._http_client.post(
+                self.OLLAMA_CHAT_URL,
+                json={
+                    "model": self.ollama_model,
+                    "stream": False,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": self.SYSTEM_MESSAGE,
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        },
+                    ],
+                    "options": {"temperature": self.temperature},
+                },
+                timeout=300,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.ConnectionError as error:
+            raise OllamaUnavailableError(
+                "Ollama is not running. Start it with:\n"
+                "ollama serve\n"
+                f"ollama pull {self.ollama_model}"
+            ) from error
+        except requests.RequestException as error:
+            raise OllamaUnavailableError(
+                f"Ollama request failed: {error}. Ensure the model is available "
+                f"with: ollama pull {self.ollama_model}"
+            ) from error
+        except ValueError as error:
+            raise RagEngineError(
+                "Ollama returned an invalid JSON response."
+            ) from error
+
+        message = payload.get("message") if isinstance(payload, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise RagEngineError("Ollama returned an empty answer.")
+        return content
 
     @staticmethod
     def _ensure_citation(
@@ -187,13 +320,12 @@ class RagEngine:
             return DEFAULT_PROMPT_TEMPLATE
         return template if template.strip() else DEFAULT_PROMPT_TEMPLATE
 
-    @staticmethod
-    def _cache_key(repo_id: str, question: str) -> str:
+    def _cache_key(self, repo_id: str, question: str) -> str:
         normalized_question = " ".join(question.split()).casefold()
         digest = hashlib.sha256(
-            f"{repo_id}\0{normalized_question}".encode("utf-8")
+            f"{repo_id}\0{self.model}\0{normalized_question}".encode("utf-8")
         ).hexdigest()
-        return f"rag-answer:{digest}"
+        return f"rag-answer:v2:{digest}"
 
     def _cache_result(self, key: str, result: RagResult) -> None:
         if self.cache is None:

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from sqlalchemy import func, select
 
 from app.core.embedding_service import EmbeddingService
@@ -32,7 +33,10 @@ def test_complete_indexing_flow_saves_sqlite_and_vectors(tmp_path: Path) -> None
     vector_store = VectorStore(tmp_path / "chroma")
     indexer = RepositoryIndexer(
         session_factory,
-        embedding_service=EmbeddingService(api_key="", fake_dimensions=16),
+        embedding_service=EmbeddingService(
+            provider="fake",
+            fake_dimensions=16,
+        ),
         vector_store=vector_store,
     )
 
@@ -65,7 +69,10 @@ def test_reindex_replaces_stale_vectors(tmp_path: Path) -> None:
     source_path.write_text("def old():\n    pass\n", encoding="utf-8")
     engine = init_db(get_engine("sqlite:///:memory:"))
     vector_store = VectorStore(tmp_path / "chroma")
-    embedding_service = EmbeddingService(api_key="", fake_dimensions=16)
+    embedding_service = EmbeddingService(
+        provider="fake",
+        fake_dimensions=16,
+    )
     indexer = RepositoryIndexer(
         get_session_factory(engine),
         embedding_service=embedding_service,
@@ -104,3 +111,21 @@ def test_summary_contains_required_metrics() -> None:
         "chunks_created: 34\n"
         "indexing_time: 1.23s"
     )
+
+
+def test_indexing_rejects_repository_without_indexable_chunks(
+    tmp_path: Path,
+) -> None:
+    repository_path = tmp_path / "repository"
+    repository_path.mkdir()
+    (repository_path / "empty.py").write_text("", encoding="utf-8")
+    (repository_path / "README.md").write_text("Documentation", encoding="utf-8")
+    engine = init_db(get_engine("sqlite:///:memory:"))
+    indexer = RepositoryIndexer(get_session_factory(engine))
+
+    with pytest.raises(ValueError, match="No supported source files"):
+        indexer.index_path(
+            repo_id="repo-empty",
+            repo_url="https://github.com/example/empty.git",
+            repository_path=repository_path,
+        )

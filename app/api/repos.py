@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import time
 from typing import Annotated
 
@@ -9,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_indexer, get_session
+from app.config import is_development
 from app.core.embedding_service import EmbeddingServiceError
 from app.core.indexer import RepositoryIndexer
 from app.models.db import CodeChunk, Repository, SourceFile
@@ -20,6 +23,18 @@ from app.models.schemas import (
 
 
 router = APIRouter(prefix="/repos", tags=["repositories"])
+logger = logging.getLogger(__name__)
+
+
+def _error_detail(prefix: str, error: Exception) -> str:
+    if not is_development():
+        return prefix
+
+    message = str(error).strip() or error.__class__.__name__
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if api_key:
+        message = message.replace(api_key, "[redacted]")
+    return f"{prefix}: {message}"
 
 
 @router.post(
@@ -35,24 +50,34 @@ def index_repository(
     try:
         result = indexer.index_url(str(request.repo_url))
     except GitError as error:
+        logger.exception("Repository clone failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to clone the GitHub repository.",
+            detail=_error_detail(
+                "Unable to clone the GitHub repository",
+                error,
+            ),
         ) from error
     except EmbeddingServiceError as error:
+        logger.exception("Repository embedding generation failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to generate repository embeddings.",
+            detail=_error_detail(
+                "Unable to generate repository embeddings",
+                error,
+            ),
         ) from error
     except ValueError as error:
+        logger.exception("Repository indexing validation failed")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(error),
         ) from error
     except Exception as error:
+        logger.exception("Repository indexing failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Repository indexing failed.",
+            detail=_error_detail("Repository indexing failed", error),
         ) from error
 
     return RepoIndexResponse(

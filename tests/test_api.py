@@ -1,11 +1,18 @@
+import logging
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.core.embedding_service import EmbeddingServiceError
 from app.core.indexer import IndexingResult
-from app.core.rag_engine import RagResult
+from app.core.rag_engine import (
+    MissingOpenAIAPIKeyError,
+    OllamaUnavailableError,
+    RagResult,
+)
 from app.core.retriever import RetrievedChunk
-from app.main import create_app
+from app.main import create_app, load_environment
 from app.models.db import (
     CodeChunk,
     QueryLog,
@@ -57,6 +64,23 @@ class StubRagEngine:
                 ),
             ),
         )
+
+    def answer_question(
+        self, repo_id: str, question: str, top_k: int = 8
+    ) -> dict[str, object]:
+        result = self.answer_with_sources(repo_id, question, k=top_k)
+        return {
+            "answer": result.answer,
+            "sources": [
+                {
+                    "file_path": source.file_path,
+                    "start_line": source.start_line,
+                    "end_line": source.end_line,
+                    "symbol_name": source.symbol_name,
+                }
+                for source in result.sources
+            ],
+        }
 
 
 def make_client(
@@ -125,6 +149,33 @@ def test_post_repos_index_returns_summary(tmp_path: Path) -> None:
     assert len(indexer.urls) == 1
 
 
+def test_post_repos_index_exposes_embedding_error_in_development(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, indexer, _, _ = make_client(tmp_path)
+    monkeypatch.setenv("APP_ENV", "development")
+
+    def fail_indexing(_repo_url: str) -> IndexingResult:
+        raise EmbeddingServiceError("Incorrect API key provided")
+
+    indexer.index_url = fail_indexing  # type: ignore[method-assign]
+
+    with client:
+        response = client.post(
+            "/repos/index",
+            json={"repo_url": "https://github.com/some/repo"},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": (
+            "Unable to generate repository embeddings: "
+            "Incorrect API key provided"
+        )
+    }
+
+
 def test_get_repository_returns_indexing_metadata(tmp_path: Path) -> None:
     client, _, _, session_factory = make_client(tmp_path)
     seed_repository(session_factory, tmp_path)
@@ -178,6 +229,57 @@ def test_post_query_returns_sources_and_saves_history(tmp_path: Path) -> None:
 
     with session_factory() as session:
         assert session.query(QueryLog).count() == 1
+
+
+def test_post_query_reports_missing_openai_key(tmp_path: Path) -> None:
+    client, _, rag_engine, session_factory = make_client(tmp_path)
+    seed_repository(session_factory, tmp_path)
+
+    def fail_without_key(*_args: object, **_kwargs: object) -> RagResult:
+        raise MissingOpenAIAPIKeyError("OPENAI_API_KEY is required")
+
+    rag_engine.answer_question = fail_without_key  # type: ignore[method-assign]
+
+    with client:
+        response = client.post(
+            "/query",
+            json={
+                "repo_id": "abc123",
+                "question": "How does authentication work?",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "OPENAI_API_KEY is required"
+    }
+
+
+def test_post_query_reports_ollama_startup_commands(tmp_path: Path) -> None:
+    client, _, rag_engine, session_factory = make_client(tmp_path)
+    seed_repository(session_factory, tmp_path)
+
+    def fail_without_ollama(*_args: object, **_kwargs: object) -> RagResult:
+        raise OllamaUnavailableError(
+            "Ollama is not running. Start it with:\n"
+            "ollama serve\n"
+            "ollama pull qwen2.5-coder:1.5b"
+        )
+
+    rag_engine.answer_question = fail_without_ollama  # type: ignore[method-assign]
+
+    with client:
+        response = client.post(
+            "/query",
+            json={
+                "repo_id": "abc123",
+                "question": "How does authentication work?",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "ollama serve" in response.json()["detail"]
+    assert "ollama pull qwen2.5-coder:1.5b" in response.json()["detail"]
 
 
 def test_missing_repository_returns_404(tmp_path: Path) -> None:
@@ -255,3 +357,24 @@ def test_get_repository_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
             "CALLS",
         ),
     }
+
+
+def test_load_environment_reads_dotenv_without_exposing_secret(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENAI_API_KEY=sk-test-secret-1234\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="app.config"):
+        loaded = load_environment(env_path)
+
+    assert loaded
+    assert os.getenv("OPENAI_API_KEY") == "sk-test-secret-1234"
+    assert "configured=True" in caplog.text
+    assert "sk-test-secret-1234" not in caplog.text

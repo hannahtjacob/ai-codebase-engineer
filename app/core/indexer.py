@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
 from sqlalchemy import delete
@@ -17,6 +18,9 @@ from app.models.db import (
     Repository,
     SourceFile as SourceFileRecord,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,13 +73,32 @@ class RepositoryIndexer:
         resolved_path = Path(repository_path).expanduser().resolve()
         files = self.scanner.scan(resolved_path)
         chunks = self.chunker.chunk_files(files, repo_id)
+        non_empty_chunks = [chunk for chunk in chunks if chunk.content.strip()]
+
+        logger.info("Repository scan complete: files_scanned=%d", len(files))
+        logger.info("Repository chunking complete: chunks_created=%d", len(chunks))
+        logger.info(
+            "Preparing repository embeddings: non_empty_chunks=%d",
+            len(non_empty_chunks),
+        )
+
+        if not non_empty_chunks:
+            raise ValueError(
+                "No supported source files with indexable code were found "
+                "in the repository."
+            )
+        chunks = non_empty_chunks
 
         if self.embedding_service is not None and self.vector_store is not None:
-            embeddings = self.embedding_service.embed_texts(
-                [chunk.content for chunk in chunks]
-            )
-            self.vector_store.delete_repo(repo_id)
-            self.vector_store.upsert_chunks(repo_id, chunks, embeddings)
+            try:
+                embeddings = self.embedding_service.embed_texts(
+                    [chunk.content for chunk in chunks]
+                )
+                self.vector_store.delete_repo(repo_id)
+                self.vector_store.upsert_chunks(repo_id, chunks, embeddings)
+            except Exception:
+                logger.exception("Repository vector indexing failed for %s", repo_id)
+                raise
 
         with self.session_factory.begin() as session:
             repository = session.get(Repository, repo_id)

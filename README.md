@@ -18,15 +18,17 @@ API design, observability metrics, and reproducible evaluation.
 - Detects common programming languages and skips binary or oversized files.
 - Uses Python ASTs to chunk top-level functions, async functions, and classes.
 - Falls back to overlapping line windows for non-Python source files.
-- Generates OpenAI embeddings in batches, with deterministic local embeddings
-  when no API key is configured.
+- Generates free local embeddings with Sentence Transformers by default.
+- Supports OpenAI embeddings and deterministic fake embeddings through a
+  configurable provider.
 - Stores vectors and source metadata in persistent Chroma collections.
 - Builds Python repository graphs with file, import, class, function, method,
   and call relationships.
 - Expands vector search results through one-hop imports, calls, and parent
   classes.
-- Generates answers constrained to retrieved code and enforces file-and-line
-  citations.
+- Generates answers locally with Ollama by default, constrained to retrieved
+  code with enforced file-and-line citations.
+- Supports OpenAI `gpt-4o-mini` as an optional hosted LLM provider.
 - Persists repository metadata, chunks, query history, and JSON cache entries
   in SQLite.
 - Caches embeddings by content hash and answers by repository plus normalized
@@ -49,6 +51,8 @@ flowchart LR
     Loader --> Scanner[Source File Scanner]
     Scanner --> Chunker[AST and Sliding Window Chunker]
     Chunker --> Embeddings[Embedding Service]
+    Embeddings --> LocalModel[Sentence Transformers]
+    Embeddings -. optional .-> OpenAIEmbeddings[OpenAI Embeddings API]
     Embeddings --> Chroma[(Chroma Vector Index)]
     Indexer --> SQLite[(SQLite Metadata and Cache)]
 
@@ -59,7 +63,8 @@ flowchart LR
     Retriever --> Graph[NetworkX Dependency Graph]
     Graph --> AST[Python AST Parser]
     Retriever --> SQLite
-    RAG --> LLM[OpenAI Responses API or Mock LLM]
+    RAG --> Ollama[Ollama Local Chat API]
+    RAG -. optional .-> OpenAILLM[OpenAI Chat Completions]
     RAG --> SQLite
 
     Eval[Evaluation CLI] --> Indexer
@@ -92,7 +97,8 @@ persistent graph storage.
 | Frontend | Streamlit |
 | Metadata and cache | SQLite, SQLAlchemy |
 | Vector search | ChromaDB |
-| Embeddings and generation | OpenAI Python SDK |
+| Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`) by default; optional OpenAI |
+| Answer generation | Ollama with `qwen2.5-coder:1.5b` by default; optional OpenAI |
 | Parsing | Python `ast` |
 | Dependency graphs | NetworkX |
 | Repository operations | GitPython |
@@ -110,9 +116,37 @@ Create the environment file:
 cp .env.example .env
 ```
 
-Add `OPENAI_API_KEY` to `.env` for OpenAI embeddings and generated answers.
-Without a key, deterministic embedding and mock-LLM modes allow the pipeline
-and tests to run without external API calls.
+Repository indexing uses free local embeddings by default and does not require
+an OpenAI API key. The model is downloaded from Hugging Face the first time it
+is used:
+
+```dotenv
+EMBEDDING_PROVIDER=local
+LOCAL_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
+
+Add `OPENAI_API_KEY` only when using `LLM_PROVIDER=openai` or
+`EMBEDDING_PROVIDER=openai`. If OpenAI embeddings return
+`insufficient_quota`, indexing automatically falls back to the local model.
+Tests use injected models and deterministic embeddings, so they do not require
+external API calls.
+
+For free local answer generation, install Ollama and prepare the default model:
+
+```bash
+ollama serve
+ollama pull qwen2.5-coder:1.5b
+```
+
+Configure `.env`:
+
+```dotenv
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=qwen2.5-coder:1.5b
+```
+
+To use OpenAI instead, set `LLM_PROVIDER=openai` and provide
+`OPENAI_API_KEY`. The `mock` provider is restricted to automated tests.
 
 Start FastAPI, Streamlit, and Neo4j:
 
@@ -146,6 +180,16 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[test]"
 cp .env.example .env
 ```
+
+The default `.env.example` configuration uses local embeddings. You can verify
+the configured provider with:
+
+```bash
+python scripts/check_embeddings.py
+```
+
+The first local run downloads `all-MiniLM-L6-v2`; later runs use the local
+model cache.
 
 Run the backend:
 

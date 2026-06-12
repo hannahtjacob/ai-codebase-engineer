@@ -147,6 +147,9 @@ class FileScanner:
         except (OSError, UnicodeDecodeError):
             return None
 
+        if not content.strip():
+            return None
+
         return SourceFile(
             relative_path=path.relative_to(root).as_posix(),
             absolute_path=str(path.resolve()),

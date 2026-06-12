@@ -58,6 +58,10 @@ def extract_error_message(response: requests.Response) -> str:
     detail = payload.get("detail") if isinstance(payload, dict) else None
     if isinstance(detail, str):
         return detail
+    if isinstance(detail, dict):
+        message = detail.get("message")
+        if isinstance(message, str):
+            return message
     if isinstance(detail, list):
         messages = [
             item.get("msg", "Invalid request")
@@ -133,7 +137,7 @@ def main() -> None:
                         {"repo_url": repo_url.strip()},
                     )
                 except BackendError as error:
-                    st.error(str(error))
+                    st.error(f"Indexing failed: {error}")
                 else:
                     st.session_state.repo_id = result.get("repo_id")
                     st.session_state.repo_url = repo_url.strip()

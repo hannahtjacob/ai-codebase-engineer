@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Annotated
 
@@ -9,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_rag_engine, get_session
 from app.core.embedding_service import EmbeddingServiceError
-from app.core.rag_engine import RagEngine
+from app.core.rag_engine import (
+    MissingOpenAIAPIKeyError,
+    OllamaUnavailableError,
+    RagEngine,
+    RagEngineError,
+)
 from app.models.db import QueryLog, Repository
 from app.models.schemas import (
     QueryHistoryItem,
@@ -20,6 +26,7 @@ from app.models.schemas import (
 
 
 router = APIRouter(tags=["queries"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/query", response_model=QueryResponse)
@@ -36,15 +43,34 @@ def query_repository(
 
     started_at = time.perf_counter()
     try:
-        result = rag_engine.answer_with_sources(
+        result = rag_engine.answer_question(
             request.repo_id,
             request.question,
-            k=request.top_k,
+            top_k=request.top_k,
         )
-    except (EmbeddingServiceError, RuntimeError) as error:
+    except MissingOpenAIAPIKeyError as error:
+        logger.exception("OpenAI configuration error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+    except OllamaUnavailableError as error:
+        logger.exception("Ollama is unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+    except RagEngineError as error:
+        logger.exception("RAG answer generation failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to answer the query.",
+            detail=str(error),
+        ) from error
+    except (EmbeddingServiceError, RuntimeError) as error:
+        logger.exception("Query processing failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
         ) from error
     except ValueError as error:
         raise HTTPException(
@@ -62,7 +88,7 @@ def query_repository(
         QueryLog(
             repository_id=request.repo_id,
             query=request.question,
-            response=result.answer,
+            response=str(result["answer"]),
             duration_ms=duration_ms,
         )
     )
@@ -76,15 +102,10 @@ def query_repository(
         ) from error
 
     return QueryResponse(
-        answer=result.answer,
+        answer=str(result["answer"]),
         sources=[
-            SourceCitation(
-                file_path=source.file_path,
-                start_line=source.start_line,
-                end_line=source.end_line,
-                symbol_name=source.symbol_name,
-            )
-            for source in result.sources
+            SourceCitation.model_validate(source)
+            for source in result["sources"]
         ],
     )
 

@@ -69,6 +69,16 @@ def test_scan_skips_binary_files(tmp_path: Path) -> None:
     assert FileScanner().scan(tmp_path) == []
 
 
+def test_scan_skips_empty_and_whitespace_only_files(tmp_path: Path) -> None:
+    (tmp_path / "empty.py").write_text("", encoding="utf-8")
+    (tmp_path / "blank.ts").write_text(" \n\t\n", encoding="utf-8")
+    (tmp_path / "code.py").write_text("value = 1\n", encoding="utf-8")
+
+    files = FileScanner().scan(tmp_path)
+
+    assert [file.relative_path for file in files] == ["code.py"]
+
+
 def test_scan_skips_files_larger_than_one_megabyte(tmp_path: Path) -> None:
     (tmp_path / "large.py").write_bytes(b"x" * (FileScanner.MAX_FILE_SIZE + 1))
     (tmp_path / "allowed.py").write_text("x = 1\n", encoding="utf-8")

@@ -11,6 +11,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.cache import SQLiteCache
+from app.config import load_environment
 from app.core.embedding_service import EmbeddingService
 from app.core.evaluator import EvaluationCase, Evaluator, markdown_table
 from app.core.graph_builder import GraphBuilder
@@ -53,6 +54,7 @@ def save_report(path: str | Path, report: dict[str, Any]) -> None:
 
 
 def main() -> None:
+    load_environment()
     parser = argparse.ArgumentParser(
         description="Evaluate repository retrieval and codebase QA quality."
     )
