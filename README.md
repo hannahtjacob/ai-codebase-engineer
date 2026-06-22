@@ -191,17 +191,24 @@ python scripts/check_embeddings.py
 The first local run downloads `all-MiniLM-L6-v2`; later runs use the local
 model cache.
 
-Run the backend:
+To view the website locally, run the backend and frontend in two terminals.
+
+Terminal 1 - start the FastAPI backend:
 
 ```bash
+source .venv/bin/activate
 uvicorn app.main:app --reload
 ```
 
-Run the frontend in another terminal:
+Terminal 2 - start the Streamlit frontend:
 
 ```bash
+source .venv/bin/activate
 streamlit run frontend/streamlit_app.py
 ```
+
+Then open the website at http://localhost:8501. The API docs are available at
+http://localhost:8000/docs.
 
 Run tests:
 
